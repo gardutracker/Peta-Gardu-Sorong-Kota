@@ -197,43 +197,91 @@ function searchScore(r,q){
  return -1;
 }
 
-function getBestResult(filter=''){
+function getFilteredGardu(filter=''){
  const q=filter.trim().toLowerCase();
- if(!q) return null;
- return gardu
-   .map(r=>({r,score:searchScore(r,q)}))
-   .filter(x=>x.score>=0)
-   .sort((a,b)=>{
-      if(b.score!==a.score) return b.score-a.score;
-      return String(a.r.code).localeCompare(String(b.r.code));
-   })[0]?.r || null;
+ if(!q) return gardu.slice();
+
+ // Jika yang diketik cocok dengan wilayah/area, tampilkan SEMUA gardu
+ // pada wilayah tersebut dan sembunyikan gardu wilayah lain.
+ const areaMatches=gardu.filter(r=>String(r.area||'').toLowerCase().includes(q));
+ if(areaMatches.length) return areaMatches;
+
+ // Untuk pencarian kode/alamat, tampilkan semua gardu yang cocok juga.
+ return gardu.filter(r=>{
+   const code=String(r.code||'').toLowerCase();
+   const address=String(r.address||'').toLowerCase();
+   const penyulang=String(r.penyulang||'').toLowerCase();
+   return code.includes(q) || address.includes(q) || penyulang.includes(q);
+ });
+}
+
+function getBestResult(filter=''){
+ const results=getFilteredGardu(filter);
+ if(!results.length) return null;
+ const q=filter.trim().toLowerCase();
+ return results.slice().sort((a,b)=>{
+   const score=r=>{
+     const code=String(r.code||'').toLowerCase();
+     const area=String(r.area||'').toLowerCase();
+     const address=String(r.address||'').toLowerCase();
+     if(area===q) return 1000;
+     if(code===q) return 950;
+     if(code.startsWith(q)) return 900;
+     if(area.startsWith(q)) return 850;
+     if(address.startsWith(q)) return 700;
+     return 100;
+   };
+   return score(b)-score(a);
+ })[0] || null;
+}
+
+function updateMarkerVisibility(filter=''){
+ const results=getFilteredGardu(filter);
+ const visibleCodes=new Set(results.map(r=>r.code));
+ markers.forEach(x=>{
+   if(visibleCodes.has(x.data.code)){
+     if(!map.hasLayer(x.marker)) x.marker.addTo(map);
+   }else{
+     if(map.hasLayer(x.marker)) map.removeLayer(x.marker);
+   }
+ });
+ return results;
 }
 
 function renderList(filter=''){
  const q=filter.trim();
  const list=document.getElementById('list');
+ const results=updateMarkerVisibility(q);
 
  if(!q){
    list.innerHTML='';
    document.getElementById('total').textContent=gardu.length;
-   return null;
+   return results;
  }
 
- const best=getBestResult(q);
-
- if(!best){
-   list.innerHTML='<div class="search-empty">Tidak ada gardu yang cocok.<br>Coba kode SRG, alamat, atau wilayah lain.</div>';
+ if(!results.length){
+   list.innerHTML='<div class="search-empty">Tidak ada gardu yang cocok.<br>Coba kode SRG, alamat, penyulang, atau wilayah lain.</div>';
    document.getElementById('total').textContent='0';
    return null;
  }
 
- list.innerHTML=`<div class="item search-result" onclick="focusGardu('${escAttr(best.code)}')">
-   <div class="code">${esc(best.code)}</div>
-   <div class="addr">${esc(best.address)}</div>
-   <div class="meta">${esc(best.area)} • ${best.lat.toFixed(6)}, ${best.lng.toFixed(6)}</div>
- </div>`;
- document.getElementById('total').textContent='1';
- return best;
+ list.innerHTML=results.map(r=>`<div class="item search-result" onclick="focusGardu('${escAttr(r.code)}')">
+   <div class="code">${esc(r.code)}</div>
+   <div class="addr">${esc(r.address)}</div>
+   <div class="meta">${esc(r.area)} • ${r.lat.toFixed(6)}, ${r.lng.toFixed(6)}</div>
+ </div>`).join('');
+ document.getElementById('total').textContent=results.length;
+ return results;
+}
+
+function focusFilteredResults(results){
+ if(!results || !results.length) return;
+ if(results.length===1){
+   focusGardu(results[0].code);
+   return;
+ }
+ const bounds=L.latLngBounds(results.map(r=>[r.lat,r.lng]));
+ if(bounds.isValid()) map.fitBounds(bounds,{padding:[60,60],maxZoom:16,animate:true});
 }
 
 function focusGardu(code){
@@ -261,21 +309,25 @@ let searchTimer=null;
 document.getElementById('search').addEventListener('input',e=>{
   clearTimeout(searchTimer);
   const value=e.target.value;
-  renderList(value);
+  const results=renderList(value);
 
-  if(!value.trim()) return;
+  if(!value.trim()){
+    map.setView([-0.89,131.29],13,{animate:true});
+    return;
+  }
 
+  // Saat mengetik nama wilayah (mis. ELANG/YANI), semua gardu wilayah
+  // tersebut tetap terlihat dan peta otomatis menyesuaikan seluruh titik.
   searchTimer=setTimeout(()=>{
-    const best=getBestResult(value);
-    if(best) focusGardu(best.code);
+    focusFilteredResults(results);
   },180);
 });
 
 document.getElementById('search').addEventListener('keydown',e=>{
   if(e.key==='Enter'){
     clearTimeout(searchTimer);
-    const best=getBestResult(e.target.value);
-    if(best) focusGardu(best.code);
+    const results=renderList(e.target.value);
+    focusFilteredResults(results);
   }
 });
 
